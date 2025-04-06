@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            flex: 1;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 4px;
+            word-break: break-word;
+        }
+        .received {
+            background-color: #f0f0f0;
+        }
+        .sent {
+            background-color: #e3f2fd;
+            text-align: right;
+        }
+        .system {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .error {
+            background-color: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: none;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: none;
+        }
+        .connected {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .disconnected {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .warning {
+            background-color: #fff3e0;
+            color: #e65100;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="error" class="error"></div>
+        <div id="status" class="status"></div>
+        
+        <div class="input-group">
+            <input type="text" id="userId" placeholder="User ID">
+            <input type="text" id="conversationId" placeholder="Conversation ID">
+            <button onclick="connect()" id="connectBtn">Connect</button>
+        </div>
+        <div class="input-group">
+            <input type="text" id="messageInput" placeholder="Type your message" disabled>
+            <button onclick="sendMessage()" id="sendBtn" disabled>Send</button>
+        </div>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let socket = null;
+        let token = null;
+        const userIdInput = document.getElementById('userId');
+        const conversationIdInput = document.getElementById('conversationId');
+        const messageInput = document.getElementById('messageInput');
+        const connectBtn = document.getElementById('connectBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const messagesDiv = document.getElementById('messages');
+        const errorDiv = document.getElementById('error');
+        const statusDiv = document.getElementById('status');
+
+        function showError(message) {
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        function updateStatus(message, isConnected) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${isConnected ? 'connected' : 'disconnected'}`;
+            statusDiv.style.display = 'block';
+        }
+
+        function addMessage(message, type = 'received') {
+            const messageElement = document.createElement('div');
+            messageElement.className = `message ${type}`;
+            messageElement.textContent = message;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        async function getToken(userId) {
+            try {
+                const response = await fetch('http://localhost:8000/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: userId,
+                        password: 'password' // In a real app, this would be properly handled
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to get token');
+                }
+                
+                const data = await response.json();
+                return data.access_token;
+            } catch (error) {
+                showError('Failed to authenticate: ' + error.message);
+                return null;
+            }
+        }
+
+        async function connect() {
+            const userId = userIdInput.value;
+            const conversationId = conversationIdInput.value;
+
+            if (!userId || !conversationId) {
+                showError('Please enter both User ID and Conversation ID');
+                return;
+            }
+
+            try {
+                token = await getToken(userId);
+                if (!token) {
+                    return;
+                }
+
+                socket = new WebSocket(`ws://localhost:8000/ws/${userId}/${conversationId}?token=${token}`);
+
+                socket.onopen = () => {
+                    updateStatus('Connected to WebSocket server', true);
+                    messageInput.disabled = false;
+                    sendBtn.disabled = false;
+                    connectBtn.disabled = true;
+                    addMessage('Connected to WebSocket server', 'system');
+                };
+
+                socket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        switch (data.type) {
+                            case 'text':
+                                addMessage(data.content, 'received');
+                                break;
+                            case 'system':
+                                addMessage(data.content, 'system');
+                                break;
+                            case 'error':
+                                showError(data.content);
+                                break;
+                            case 'echo':
+                                addMessage(data.content, 'received');
+                                break;
+                            case 'warning':
+                                addMessage(data.content, 'warning');
+                                break;
+                            default:
+                                addMessage(data.content, 'received');
+                        }
+                    } catch (error) {
+                        showError('Error parsing message: ' + error.message);
+                    }
+                };
+
+                socket.onclose = (event) => {
+                    updateStatus('Disconnected from WebSocket server', false);
+                    messageInput.disabled = true;
+                    sendBtn.disabled = true;
+                    connectBtn.disabled = false;
+                    addMessage(`Disconnected: ${event.reason || 'Unknown reason'}`, 'system');
+                };
+
+                socket.onerror = (error) => {
+                    showError('WebSocket error: ' + error.message);
+                };
+            } catch (error) {
+                showError('Connection error: ' + error.message);
+            }
+        }
+
+        function sendMessage() {
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                showError('Not connected to server');
+                return;
+            }
+
+            const message = messageInput.value;
+            if (!message) return;
+
+            try {
+                let messageData = {
+                    type: "text",
+                    content: message
+                };
+
+                // Check if it's a command
+                if (message.startsWith("/")) {
+                    messageData.type = "command";
+                }
+
+                socket.send(JSON.stringify(messageData));
+                addMessage(message, 'sent');
+                messageInput.value = '';
+            } catch (error) {
+                showError('Error sending message: ' + error.message);
+            }
+        }
+
+        // Allow sending message with Enter key
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (socket) {
+                socket.close();
+            }
+        });
+    </script>
+</body>
+</html> 
